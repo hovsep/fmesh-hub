@@ -1,0 +1,6 @@
+// Every module in this repo. Local builds and editors use it so modules see
+// each other's unreleased code. CI and releases set GOWORK=off: each module
+// must build from its own go.mod, as its consumers build it. CI checks this
+// list with `go work use -r .` (or run `make work`).
+
+go 1.27

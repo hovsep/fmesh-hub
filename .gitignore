@@ -21,13 +21,12 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
-go.work.sum
+# go.work and go.work.sum are committed: they list this repo's modules.
 
 # env file
 .env
 
 # Editor/IDE
-# .idea/
+.idea/
+.cursor/
 # .vscode/

@@ -1,0 +1,129 @@
+name: CI
+
+# Lint and test for every module, in one workflow.
+#
+# - changes: lists the modules this push or pull request touches.
+# - module: one matrix job per touched module. Each builds against its own
+#   go.mod (GOWORK=off), exactly as a consumer of that module would.
+# - workspace: go.work lists every module in the repo.
+# - ci: the only required status check. It always runs and fails if any job
+#   above failed or was cancelled. Jobs skipped because nothing changed count
+#   as passed, so a pull request that touches no module still gets a green
+#   check instead of waiting on "Expected" forever.
+#
+# No workflow-level path filter here on purpose: a workflow skipped by
+# on.paths reports nothing, and a required check that never reports blocks
+# the merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Find changed modules
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.list.outputs.modules }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: List changed modules
+        id: list
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          .github/scripts/changed-modules.sh "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
+
+  module:
+    name: ${{ matrix.module }}
+    needs: changes
+    if: needs.changes.outputs.modules != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.modules) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Each module has its own Go version and its own cache, keyed on its
+      # go.sum, so one module's dependency bump never evicts another's cache.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "run make fmt"; exit 1; }
+
+      - name: Run tests
+        run: go test -race ./...
+
+      # Pinned so a new golangci-lint release cannot turn CI red without a repo
+      # change. It finds the shared .golangci.yml at the repo root by walking
+      # up from the module directory.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          working-directory: ${{ matrix.module }}
+
+  workspace:
+    name: go.work lists every module
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: go work use -r . changes nothing
+        run: |
+          go work use -r .
+          git diff --exit-code go.work || { echo "::error::go.work is out of date: run 'go work use -r .'"; exit 1; }
+
+  ci:
+    name: CI
+    needs: [changes, module, workspace]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or had nothing to do
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if jq -e 'any(.[]; . == "failure" or . == "cancelled")' <<<"$RESULTS" >/dev/null; then
+            exit 1
+          fi
