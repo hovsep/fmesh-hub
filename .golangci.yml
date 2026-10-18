@@ -1,0 +1,108 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    # --- correctness ---
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - makezero
+    - nilerr
+    - nilnil
+    - staticcheck
+    - unused
+    - durationcheck
+    - asasalint
+    - copyloopvar
+    - reassign
+    - exhaustive
+    # --- complexity ---
+    - gocyclo
+    # --- style ---
+    - dupl
+    - goconst
+    - gocritic
+    - godot
+    - misspell
+    - nakedret
+    - nolintlint
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+    - dupword
+    - recvcheck
+    - errname
+    # --- security ---
+    - gosec
+    # --- performance ---
+    - perfsprint
+    - prealloc
+    - mirror
+    # --- best practices ---
+    # thelper is deliberately absent: it cannot tell named helpers from
+    # table-driven assertion closures, and t.Helper() in those closures makes
+    # failures point at the dispatch line instead of the assert.
+    - gochecknoinits
+    - testifylint
+    - usestdlibvars
+    - intrange
+    - modernize
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # SA4023 panics inside staticcheck (go/tools v0.8.0) on calls to Go 1.27
+        # generic methods — its nilness fact table has one entry for a two-result
+        # method. Re-enable once staticcheck handles generic methods.
+        - -SA4023
+    dupl:
+      threshold: 150
+    exhaustive:
+      # A switch with a default arm has made its choice about the other values.
+      default-signifies-exhaustive: true
+    gocyclo:
+      min-complexity: 15
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - wrapperFunc
+        - singleCaseSwitch
+        - ifElseChain
+      enabled-tags:
+        - performance
+        - style
+    govet:
+      enable:
+        - shadow
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    rules:
+      # Package-level doc comments are not required on every file.
+      - linters: [staticcheck]
+        text: at least one file in a package should have a package comment
+      - linters: [revive]
+        text: should have a package comment
+      # Test files get relaxed rules.
+      - linters: [dupl, gosec, goconst]
+        path: _test\.go
+      - linters: [revive]
+        path: _test\.go$
+        text: unused-parameter
+      - linters: [unparam, unused]
+        path: _test\.go$
+    paths:
+      - vendor
+      - third_party$
+      - builtin$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$

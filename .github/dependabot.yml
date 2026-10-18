@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Every module in the repo, wherever its go.mod lives.
+  - package-ecosystem: "gomod"
+    directories:
+      - "/**/*"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

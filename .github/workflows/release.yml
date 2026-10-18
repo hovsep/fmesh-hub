@@ -1,0 +1,111 @@
+name: Release
+
+# Releases one module. Tag <module dir>/vMAJOR.MINOR.PATCH on main, for
+# example export/v1.3.0 or tools/mesh2web/v0.1.0. Go finds a module version in
+# a multi-module repo only through a tag whose prefix is exactly the module's
+# directory.
+#
+# The tag must be plain semver. A suffix (export/v1.3.0-Shirak) makes a
+# pre-release, which `go get` skips, and the module proxy caches tags forever.
+# Codenames go in the GitHub release title.
+on:
+  push:
+    tags:
+      - "**/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the tag and the module
+    runs-on: ubuntu-latest
+    outputs:
+      dir: ${{ steps.tag.outputs.dir }}
+      version: ${{ steps.tag.outputs.version }}
+    env:
+      TAG: ${{ github.ref_name }}
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Tag is <module dir>/vMAJOR.MINOR.PATCH
+        id: tag
+        run: |
+          set -euo pipefail
+          dir="${TAG%/v*}"
+          version="${TAG##*/}"
+          if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'$version' in tag '$TAG' is not plain semver (vMAJOR.MINOR.PATCH). A suffix makes a pre-release, which 'go get' skips."
+            exit 1
+          fi
+          if [[ ! -f "$dir/go.mod" ]]; then
+            echo "::error::Tag prefix '$dir' is not a module directory (no $dir/go.mod)."
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Module path matches the directory and the major version
+        env:
+          DIR: ${{ steps.tag.outputs.dir }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          module=$(awk '$1 == "module" {print $2; exit}' "$DIR/go.mod")
+          major="${VERSION%%.*}"; major="${major#v}"
+          want="github.com/${GITHUB_REPOSITORY}/${DIR}"
+          if (( major >= 2 )); then want="${want}/v${major}"; fi
+          if [[ "$module" != "$want" ]]; then
+            echo "::error::$DIR/go.mod declares '$module'; tag $TAG needs '$want'."
+            exit 1
+          fi
+
+      # A replace directive is ignored by every consumer, so a release that
+      # only builds because of one is broken for them.
+      - name: No replace directives
+        env:
+          DIR: ${{ steps.tag.outputs.dir }}
+        run: |
+          if grep -Eq '^\s*replace\b|^replace\s*\(' "$DIR/go.mod"; then
+            echo "::error::$DIR/go.mod has a replace directive."
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ steps.tag.outputs.dir }}/go.mod
+          cache-dependency-path: ${{ steps.tag.outputs.dir }}/go.sum
+
+      - name: Run tests
+        working-directory: ${{ steps.tag.outputs.dir }}
+        run: go test -race ./...
+
+  release:
+    name: Publish the release
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      DIR: ${{ needs.check.outputs.dir }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      # Runs no repo code: only the gh CLI that ships on the runner.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$DIR $VERSION" --generate-notes
+
+      # Asks the module proxy for the new version, so pkg.go.dev and
+      # `go get` see it right away.
+      - name: Warm the module proxy
+        run: |
+          curl -fsS "https://proxy.golang.org/github.com/${GITHUB_REPOSITORY,,}/${DIR}/@v/${VERSION}.info"
